@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AniList Watch Tab
 // @namespace    https://github.com/wdysln9-ux/WatchTab
-// @version      0.5.2
+// @version      0.5.3
 // @description  Adds an AniList-aligned Watch tab with episode metadata from AniZip.
 // @updateURL    https://raw.githubusercontent.com/wdysln9-ux/WatchTab/main/WatchTab.user.js
 // @downloadURL  https://raw.githubusercontent.com/wdysln9-ux/WatchTab/main/WatchTab.user.js
@@ -269,20 +269,38 @@
     requestAnimeId = animeId;
     panel.replaceChildren(makeMessage('Memuat daftar episode…'));
 
+    // Keep the original working lookup order: AniZip mappings first, Hayase fallback second.
+    const urls = [
+      `https://api.ani.zip/mappings?anilist_id=${encodeURIComponent(animeId)}`,
+      `https://hayase.ani.zip/v1/episodes?anilist_id=${encodeURIComponent(animeId)}`
+    ];
+
     try {
-      // Use AniZip's documented episode endpoint, not the mappings-only endpoint.
-      const response = await fetch(`https://hayase.ani.zip/v1/episodes?anilist_id=${encodeURIComponent(animeId)}`, {
-        method: 'GET',
-        mode: 'cors'
-      });
-      if (!response.ok) throw new Error(`AniZip HTTP ${response.status}`);
-      const data = await response.json();
+      let episodeData = null;
+      let lastError = null;
+      for (const url of urls) {
+        try {
+          const response = await fetch(url, { method: 'GET', mode: 'cors' });
+          if (!response.ok) throw new Error(`AniZip HTTP ${response.status}`);
+          const data = await response.json();
+          if (extractEpisodes(data).length) {
+            episodeData = data;
+            break;
+          }
+        } catch (error) {
+          lastError = error;
+        }
+      }
+
       if (getAnimeId() !== animeId) return;
+      if (!episodeData) {
+        throw lastError || new Error('AniZip tidak menyediakan data episode untuk anime ini.');
+      }
 
       const episodeLimit = await getAniListEpisodeCount(animeId);
       if (getAnimeId() !== animeId) return;
 
-      const episodes = getReleasedUniqueEpisodes(data, episodeLimit);
+      const episodes = getReleasedUniqueEpisodes(episodeData, episodeLimit);
       renderEpisodes(panel, episodes);
       if (!episodes.length) requestAnimeId = null;
     } catch (error) {
