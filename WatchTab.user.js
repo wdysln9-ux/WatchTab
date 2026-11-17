@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AniList Watch Tab
 // @namespace    https://github.com/wdysln9-ux/WatchTab
-// @version      0.3.0
+// @version      0.3.1
 // @description  Adds a native-looking Watch tab to AniList anime pages.
 // @updateURL    https://raw.githubusercontent.com/wdysln9-ux/WatchTab/main/WatchTab.user.js
 // @downloadURL  https://raw.githubusercontent.com/wdysln9-ux/WatchTab/main/WatchTab.user.js
@@ -58,7 +58,7 @@
     const style = document.createElement('style');
     style.id = STYLE_ID;
     style.textContent = `
-      #${TAB_ID} { cursor: pointer; }
+      #${TAB_ID} { cursor: pointer; display: inline-flex; align-items: center; align-self: stretch; vertical-align: middle; line-height: inherit; }
       #${TAB_ID}.active { color: var(--color-blue, #3db4f2); }
       #${PANEL_ID} {
         display: none;
@@ -120,11 +120,12 @@
 
     addStyles();
 
+    const overviewTab = [...tabs.querySelectorAll('a')].find(link => normalize(link.textContent) === 'overview');
     let tab = document.getElementById(TAB_ID);
     if (!tab) {
       tab = document.createElement('a');
       tab.id = TAB_ID;
-      tab.className = 'link';
+      tab.className = overviewTab?.className || 'link';
       tab.href = '#watch';
       tab.textContent = 'Watch';
       tab.addEventListener('click', event => {
@@ -133,8 +134,9 @@
       });
     }
 
-    // Place Watch alongside Overview / Characters / Staff / Stats.
-    if (tab.parentElement !== tabs) tabs.appendChild(tab);
+    // Keep Watch immediately after Overview, using the same native tab styling.
+    if (overviewTab && overviewTab.nextElementSibling !== tab) overviewTab.insertAdjacentElement('afterend', tab);
+    else if (!overviewTab && tab.parentElement !== tabs) tabs.appendChild(tab);
 
     let panel = document.getElementById(PANEL_ID);
     if (!panel) {
