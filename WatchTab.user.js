@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         AniList Watch Tab
 // @namespace    https://github.com/wdysln9-ux/WatchTab
-// @version      0.6.1
-// @description  Shows AniZip episode metadata after strict AniList adult-content checks.
+// @version      0.4.2
+// @description  Adds an AniList-aligned Watch tab with episode metadata from AniZip.
 // @updateURL    https://raw.githubusercontent.com/wdysln9-ux/WatchTab/main/WatchTab.user.js
 // @downloadURL  https://raw.githubusercontent.com/wdysln9-ux/WatchTab/main/WatchTab.user.js
 // @match        https://anilist.co/*
@@ -125,133 +125,33 @@
 
   const extractEpisodes = data => {
     const collection = data?.episodes ?? data?.episodesInfo ?? data?.data?.episodes ?? data?.data?.episodesInfo;
-    let episodes = [];
     if (Array.isArray(collection)) {
-      episodes = collection.map((episode, index) => ({
+      return collection.map((episode, index) => ({
         ...episode,
-        sourceNumber: Number(episode?.episodeNumber ?? episode?.number ?? index + 1)
-      }));
-    } else if (collection && typeof collection === 'object') {
-      episodes = Object.entries(collection).map(([key, episode]) => ({
+        number: Number(episode.episodeNumber ?? episode.number ?? index + 1)
+      })).filter(episode => Number.isFinite(episode.number));
+    }
+    if (collection && typeof collection === 'object') {
+      return Object.entries(collection).map(([key, episode]) => ({
         ...episode,
-        sourceNumber: Number(episode?.episodeNumber ?? episode?.number ?? key)
-      }));
+        number: Number(episode?.episodeNumber ?? episode?.number ?? key)
+      })).filter(episode => Number.isFinite(episode.number));
     }
-
-    // Remove specials/recaps and malformed entries before de-duplicating.
-    episodes = episodes.filter(episode =>
-      Number.isFinite(episode.sourceNumber) &&
-      episode.seasonNumber !== 0 &&
-      episode.isSpecial !== true &&
-      String(episode.type || '').toUpperCase() !== 'SPECIAL'
-    );
-
-    const seen = new Set();
-    return episodes.filter(episode => {
-      const title = episode.title && typeof episode.title === 'object'
-        ? (episode.title.en || episode.title['x-jat'] || episode.title.ja || episode.title.native || '')
-        : String(episode.title || '');
-      const normalizedTitle = title.trim().toLowerCase().replace(/\s+/g, ' ');
-      const date = String(episode.airDateUtc || episode.airDate || episode.airdate || '').slice(0, 10);
-      const keys = [];
-      const identity = episode.tvdbId || episode.anidbEid || episode.episode;
-      if (identity) keys.push('id:' + identity);
-      if (date && normalizedTitle) keys.push('date-title:' + date + '|' + normalizedTitle);
-      if (date) keys.push('date-number:' + date + '|' + episode.sourceNumber);
-      if (!keys.length) keys.push('number-title:' + episode.sourceNumber + '|' + normalizedTitle);
-      if (keys.some(key => seen.has(key))) return false;
-      keys.forEach(key => seen.add(key));
-      return true;
-    });
+    return [];
   };
 
-  const getAirDate = episode => {
-    const value = episode.airDateUtc || episode.airDate || episode.airdate;
-    if (!value) return null;
-    const parsed = new Date(value);
-    return Number.isNaN(parsed.getTime()) ? null : parsed;
-  };
-
-  // Fail closed: require complete AniList moderation metadata before showing any episodes.
-  const getAniListMediaSafety = async animeId => {
-    try {
-      const response = await fetch('https://graphql.anilist.co', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
-        body: JSON.stringify({
-          query: 'query ($id: Int) { Media(id: $id, type: ANIME) { episodes isAdult genres tags { name isAdult } } }',
-          variables: { id: Number(animeId) }
-        })
-      });
-      if (!response.ok) return { safe: false, reason: 'Pemeriksaan keamanan AniList gagal. Episode disembunyikan.' };
-      const json = await response.json();
-      const media = json?.data?.Media;
-      if (!media) return { safe: false, reason: 'Data keamanan anime tidak tersedia. Episode disembunyikan.' };
-
-      // Missing or malformed moderation fields must never be treated as safe.
-      if (typeof media.isAdult !== 'boolean' ||
-          !Array.isArray(media.genres) ||
-          !Array.isArray(media.tags) ||
-          media.genres.some(genre => typeof genre !== 'string') ||
-          media.tags.some(tag => !tag || typeof tag.name !== 'string' || typeof tag.isAdult !== 'boolean')) {
-        return { safe: false, reason: 'Metadata keamanan belum lengkap. Episode disembunyikan demi keamanan.' };
-      }
-
-      const normalizeSafetyLabel = value => String(value || '')
-        .normalize('NFKC')
-        .toLowerCase()
-        .replace(/[^a-z0-9]+/g, ' ')
-        .trim();
-
-      const adultGenres = new Set(['ecchi', 'hentai', 'erotica']);
-      const blockedTagPattern = /(?:^| )(?:adult content|explicit sex|sexual content|sexual violence|nudity|nsfw|hentai|ecchi|erotica|pornography|rape|incest|bestiality|fetish|bondage|prostitution|sex work|fanservice|fan service|lewd)(?: |$)/i;
-      const genres = media.genres.map(normalizeSafetyLabel);
-      const blockedGenre = genres.find(genre => adultGenres.has(genre));
-      const blockedTag = media.tags.find(tag =>
-        tag.isAdult === true || blockedTagPattern.test(normalizeSafetyLabel(tag.name))
-      );
-
-      if (media.isAdult === true || blockedGenre || blockedTag) {
-        return { safe: false, reason: 'Konten ini memiliki penanda dewasa atau kategori sensitif. Daftar episode disembunyikan.' };
-      }
-
-      const count = Number(media.episodes);
-      return {
-        safe: true,
-        episodeCount: Number.isInteger(count) && count > 0 ? count : null
-      };
-    } catch (_) {
-      return { safe: false, reason: 'Pemeriksaan keamanan tidak dapat dilakukan. Episode disembunyikan.' };
-    }
-  };
-
-  const getReleasedUniqueEpisodes = (data, episodeLimit) => {
-    const now = new Date();
-    const unique = extractEpisodes(data)
-      .filter(episode => {
-        const airDate = getAirDate(episode);
-        // Keep entries with unknown dates, but never show an explicitly future-dated episode.
-        return !airDate || airDate.getTime() <= now.getTime();
-      })
-      .sort((a, b) => {
-        const da = getAirDate(a)?.getTime() ?? Number.MAX_SAFE_INTEGER;
-        const db = getAirDate(b)?.getTime() ?? Number.MAX_SAFE_INTEGER;
-        return da - db || a.sourceNumber - b.sourceNumber;
-      });
-    return episodeLimit ? unique.slice(0, episodeLimit) : unique;
-  };
-
-  const renderEpisodes = (panel, episodes) => {
+  const renderEpisodes = (panel, data) => {
     panel.replaceChildren();
+    const episodes = extractEpisodes(data).sort((a, b) => a.number - b.number);
+
     if (!episodes.length) {
-      panel.appendChild(makeMessage('Belum ada episode yang sudah tayang untuk anime ini.'));
+      panel.appendChild(makeMessage('Belum ada data episode dari AniZip untuk anime ini.'));
       return;
     }
 
     const grid = document.createElement('div');
     grid.className = 'watchtab-episodes';
-    episodes.forEach((episode, index) => {
-      const displayNumber = index + 1;
+    for (const episode of episodes) {
       const card = document.createElement('article');
       card.className = 'watchtab-episode';
 
@@ -270,18 +170,16 @@
 
       const number = document.createElement('div');
       number.className = 'watchtab-episode-number';
-      number.textContent = `Episode ${displayNumber}`;
+      number.textContent = `Episode ${episode.number}`;
       info.appendChild(number);
 
       const titles = episode.title || {};
       const title = document.createElement('div');
       title.className = 'watchtab-episode-title';
-      title.textContent = (typeof titles === 'object'
-        ? (titles.en || titles['x-jat'] || titles.ja || titles.native)
-        : titles) || 'Episode ' + displayNumber;
+      title.textContent = titles.en || titles['x-jat'] || titles.ja || titles.native || 'Episode ' + episode.number;
       info.appendChild(title);
 
-      const dateValue = episode.airDate || episode.airDateUtc || episode.airdate;
+      const dateValue = episode.airDate || episode.airdate;
       if (dateValue) {
         const date = document.createElement('div');
         date.className = 'watchtab-episode-date';
@@ -294,7 +192,7 @@
 
       card.appendChild(info);
       grid.appendChild(card);
-    });
+    }
     panel.appendChild(grid);
   };
 
@@ -303,7 +201,8 @@
     requestAnimeId = animeId;
     panel.replaceChildren(makeMessage('Memuat daftar episode…'));
 
-    // Keep the original working lookup order: AniZip mappings first, Hayase fallback second.
+    // AniZip's mappings endpoint is the canonical AniList-ID lookup.
+    // The alternate v1 endpoint is used only if the mappings response has no episode list.
     const urls = [
       `https://api.ani.zip/mappings?anilist_id=${encodeURIComponent(animeId)}`,
       `https://hayase.ani.zip/v1/episodes?anilist_id=${encodeURIComponent(animeId)}`
@@ -327,27 +226,18 @@
       }
 
       if (getAnimeId() !== animeId) return;
-
-      // Verify AniList safety metadata before requesting/rendering episode listings.
-      const safety = await getAniListMediaSafety(animeId);
-      if (getAnimeId() !== animeId) return;
-      if (!safety.safe) {
-        panel.replaceChildren(makeMessage(safety.reason));
-        return;
+      if (episodeData) {
+        renderEpisodes(panel, episodeData);
+      } else {
+        const message = lastError
+          ? 'AniZip tidak bisa diakses dari browser ini. Coba lagi nanti.'
+          : 'AniZip belum menyediakan metadata episode untuk anime ini.';
+        panel.replaceChildren(makeMessage(message));
+        requestAnimeId = null;
       }
-
-      if (!episodeData) {
-        throw lastError || new Error('AniZip tidak menyediakan data episode untuk anime ini.');
-      }
-
-      const episodes = getReleasedUniqueEpisodes(episodeData, safety.episodeCount);
-      renderEpisodes(panel, episodes);
-      if (!episodes.length) requestAnimeId = null;
     } catch (error) {
       if (getAnimeId() !== animeId) return;
-      console.error('[AniList Watch Tab] Gagal memuat episode:', error);
-      const reason = error && error.message ? error.message : String(error || 'Unknown error');
-      panel.replaceChildren(makeMessage('Gagal memuat episode: ' + reason));
+      panel.replaceChildren(makeMessage('Gagal memuat episode. Periksa koneksi lalu coba lagi.'));
       requestAnimeId = null;
     }
   };
