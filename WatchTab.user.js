@@ -17,7 +17,7 @@
   let currentAnimeId = null;
 
   const getAnimeId = () => {
-    const match = location.pathname.match(/^\\/anime\\/(\\d+)/);
+    const match = location.pathname.match(/^\/anime\/(\d+)/);
     return match ? match[1] : null;
   };
 
