@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AniList Watch Tab
 // @namespace    https://github.com/wdysln9-ux/WatchTab
-// @version      0.5.1
+// @version      0.5.2
 // @description  Adds an AniList-aligned Watch tab with episode metadata from AniZip.
 // @updateURL    https://raw.githubusercontent.com/wdysln9-ux/WatchTab/main/WatchTab.user.js
 // @downloadURL  https://raw.githubusercontent.com/wdysln9-ux/WatchTab/main/WatchTab.user.js
@@ -151,7 +151,7 @@
       const title = episode.title && typeof episode.title === 'object'
         ? (episode.title.en || episode.title['x-jat'] || episode.title.ja || episode.title.native || '')
         : String(episode.title || '');
-      const normalizedTitle = title.trim().toLowerCase().replace(/\\s+/g, ' ');
+      const normalizedTitle = title.trim().toLowerCase().replace(/\s+/g, ' ');
       const date = String(episode.airDateUtc || episode.airDate || episode.airdate || '').slice(0, 10);
       const keys = [];
       const identity = episode.tvdbId || episode.anidbEid || episode.episode;
@@ -287,7 +287,9 @@
       if (!episodes.length) requestAnimeId = null;
     } catch (error) {
       if (getAnimeId() !== animeId) return;
-      panel.replaceChildren(makeMessage('Gagal memuat episode. Periksa koneksi lalu coba lagi.'));
+      console.error('[AniList Watch Tab] Gagal memuat episode:', error);
+      const reason = error && error.message ? error.message : String(error || 'Unknown error');
+      panel.replaceChildren(makeMessage('Gagal memuat episode: ' + reason));
       requestAnimeId = null;
     }
   };
