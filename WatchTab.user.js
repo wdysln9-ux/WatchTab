@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AniList Watch Tab
 // @namespace    https://github.com/wdysln9-ux/WatchTab
-// @version      0.4.0
+// @version      0.4.1
 // @description  Adds an AniList-aligned Watch tab with episode metadata from AniZip.
 // @updateURL    https://raw.githubusercontent.com/wdysln9-ux/WatchTab/main/WatchTab.user.js
 // @downloadURL  https://raw.githubusercontent.com/wdysln9-ux/WatchTab/main/WatchTab.user.js
