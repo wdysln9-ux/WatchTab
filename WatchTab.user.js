@@ -1,10 +1,9 @@
 // ==UserScript==
 // @name         AniList Watch Tab
 // @namespace    https://github.com/wdysln9-ux/WatchTab
-// @version      0.1.0
+// @version      0.1.1
 // @description  Adds an experimental Watch panel to AniList anime pages.
-// @match        https://anilist.co/anime/*
-// @match        https://anilist.co/anime
+// @match        https://anilist.co/*
 // @run-at       document-idle
 // @grant        none
 // ==/UserScript==
