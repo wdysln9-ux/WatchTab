@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AniList Watch Tab
 // @namespace    https://github.com/wdysln9-ux/WatchTab
-// @version      0.3.1
+// @version      0.3.2
 // @description  Adds a native-looking Watch tab to AniList anime pages.
 // @updateURL    https://raw.githubusercontent.com/wdysln9-ux/WatchTab/main/WatchTab.user.js
 // @downloadURL  https://raw.githubusercontent.com/wdysln9-ux/WatchTab/main/WatchTab.user.js
@@ -59,7 +59,7 @@
     style.id = STYLE_ID;
     style.textContent = `
       #${TAB_ID} { cursor: pointer; display: inline-flex; align-items: center; align-self: stretch; vertical-align: middle; line-height: inherit; }
-      #${TAB_ID}.active { color: var(--color-blue, #3db4f2); }
+      #${TAB_ID}.active { color: var(--color-blue, #3db4f2) !important; }
       #${PANEL_ID} {
         display: none;
         width: 100%;
