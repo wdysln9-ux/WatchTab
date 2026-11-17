@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AniList Watch Tab
 // @namespace    https://github.com/wdysln9-ux/WatchTab
-// @version      0.6.0
+// @version      0.6.1
 // @description  Shows AniZip episode metadata after strict AniList adult-content checks.
 // @updateURL    https://raw.githubusercontent.com/wdysln9-ux/WatchTab/main/WatchTab.user.js
 // @downloadURL  https://raw.githubusercontent.com/wdysln9-ux/WatchTab/main/WatchTab.user.js
