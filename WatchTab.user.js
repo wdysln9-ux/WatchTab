@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         AniList Watch Tab
 // @namespace    https://github.com/wdysln9-ux/WatchTab
-// @version      0.1.1
-// @description  Adds an experimental Watch panel to AniList anime pages.
+// @version      0.2.0
+// @description  Adds a native-looking Watch tab to AniList anime pages.
 // @match        https://anilist.co/*
 // @run-at       document-idle
 // @grant        none
@@ -11,121 +11,138 @@
 (() => {
   'use strict';
 
-  const ROOT_ID = 'watchtab-root';
+  const TAB_ID = 'watchtab-nav-link';
+  const PANEL_ID = 'watchtab-content';
   const STYLE_ID = 'watchtab-style';
-  let lastAnimeId = null;
+  let currentAnimeId = null;
 
   const getAnimeId = () => {
-    const match = location.pathname.match(/^\/anime\/(\d+)/);
+    const match = location.pathname.match(/^\\/anime\\/(\\d+)/);
     return match ? match[1] : null;
   };
 
+  const findTabs = () => {
+    const candidates = [...document.querySelectorAll('.nav, .nav-wrap, nav')];
+    return candidates.find(node => {
+      const text = (node.innerText || '').toLowerCase();
+      return text.includes('overview') && (text.includes('character') || text.includes('staff') || text.includes('stats'));
+    }) || null;
+  };
+
+  const findContent = () =>
+    document.querySelector('.media .content') ||
+    document.querySelector('.media .overview') ||
+    document.querySelector('.media');
+
   const addStyles = () => {
     if (document.getElementById(STYLE_ID)) return;
-
     const style = document.createElement('style');
     style.id = STYLE_ID;
     style.textContent = `
-      #${ROOT_ID} {
-        margin: 18px 0;
-        font-family: inherit;
-      }
-      #${ROOT_ID} .watchtab-trigger {
-        border: 0;
-        border-radius: 7px;
-        padding: 10px 16px;
-        color: var(--color-blue, #3db4f2);
-        background: var(--color-foreground, rgba(35, 38, 46, .8));
-        font: inherit;
-        font-weight: 700;
-        cursor: pointer;
-      }
-      #${ROOT_ID} .watchtab-trigger[aria-expanded="true"] {
-        color: #fff;
-        background: var(--color-blue, #3db4f2);
-      }
-      #${ROOT_ID} .watchtab-panel {
+      #${TAB_ID} { cursor: pointer; }
+      #${TAB_ID}.active { color: var(--color-blue, #3db4f2); }
+      #${PANEL_ID} {
         display: none;
-        margin-top: 12px;
-        padding: 18px;
-        border-radius: 8px;
-        color: var(--color-text, #edf1f5);
-        background: var(--color-foreground, rgba(35, 38, 46, .8));
+        width: 100%;
+        color: var(--color-text, inherit);
+        font: inherit;
       }
-      #${ROOT_ID} .watchtab-panel.is-open { display: block; }
-      #${ROOT_ID} .watchtab-muted {
+      #${PANEL_ID}.is-active { display: block; }
+      #${PANEL_ID} .watchtab-placeholder {
         color: var(--color-text-lighter, #9ba4b4);
-        font-size: .9rem;
+        padding: 12px 0;
       }
     `;
     document.head.appendChild(style);
   };
 
-  const findMountPoint = () =>
-    document.querySelector('.media .content') ||
-    document.querySelector('.media .overview') ||
-    document.querySelector('.media') ||
-    document.querySelector('main');
+  const setWatchActive = active => {
+    const panel = document.getElementById(PANEL_ID);
+    const tab = document.getElementById(TAB_ID);
+    const content = findContent();
+    if (!panel || !tab || !content) return;
+
+    tab.classList.toggle('active', active);
+    tab.setAttribute('aria-current', active ? 'page' : 'false');
+    panel.classList.toggle('is-active', active);
+
+    [...content.children].forEach(child => {
+      if (child !== panel) child.style.display = active ? 'none' : '';
+    });
+  };
 
   const render = () => {
     const animeId = getAnimeId();
     if (!animeId) {
-      document.getElementById(ROOT_ID)?.remove();
-      lastAnimeId = null;
+      document.getElementById(TAB_ID)?.remove();
+      document.getElementById(PANEL_ID)?.remove();
+      currentAnimeId = null;
       return;
     }
 
-    const mount = findMountPoint();
-    if (!mount) return;
-
-    const existing = document.getElementById(ROOT_ID);
-    if (existing && lastAnimeId === animeId) return;
-    existing?.remove();
+    const tabs = findTabs();
+    const content = findContent();
+    if (!tabs || !content) return;
 
     addStyles();
 
-    const root = document.createElement('section');
-    root.id = ROOT_ID;
-    root.dataset.animeId = animeId;
-    root.innerHTML = `
-      <button class="watchtab-trigger" type="button" aria-expanded="false">
-        Watch
-      </button>
-      <div class="watchtab-panel" aria-live="polite">
-        <strong>Watch</strong>
-        <p class="watchtab-muted">
+    let tab = document.getElementById(TAB_ID);
+    if (!tab) {
+      tab = document.createElement('a');
+      tab.id = TAB_ID;
+      tab.className = 'link';
+      tab.href = '#watch';
+      tab.textContent = 'Watch';
+      tab.addEventListener('click', event => {
+        event.preventDefault();
+        setWatchActive(true);
+      });
+      tabs.appendChild(tab);
+    }
+
+    let panel = document.getElementById(PANEL_ID);
+    if (!panel) {
+      panel = document.createElement('section');
+      panel.id = PANEL_ID;
+      panel.innerHTML = `
+        <div class="watchtab-placeholder">
           Tab Watch berhasil dimuat untuk anime AniList #${animeId}.
           Daftar episode dan thumbnail akan ditambahkan pada tahap berikutnya.
-        </p>
-      </div>
-    `;
+        </div>
+      `;
+      content.appendChild(panel);
+    }
 
-    const trigger = root.querySelector('.watchtab-trigger');
-    const panel = root.querySelector('.watchtab-panel');
-    trigger.addEventListener('click', () => {
-      const isOpen = panel.classList.toggle('is-open');
-      trigger.setAttribute('aria-expanded', String(isOpen));
-    });
+    // Keep the custom tab in the native navigation if AniList re-renders it.
+    if (tab.parentElement !== tabs) tabs.appendChild(tab);
+    if (panel.parentElement !== content) content.appendChild(panel);
 
-    mount.prepend(root);
-    lastAnimeId = animeId;
+    if (currentAnimeId !== animeId) {
+      currentAnimeId = animeId;
+      setWatchActive(false);
+    }
   };
 
-  const scheduleRender = (() => {
-    let queued = false;
-    return () => {
-      if (queued) return;
-      queued = true;
-      requestAnimationFrame(() => {
-        queued = false;
-        render();
-      });
-    };
-  })();
+  // Selecting any built-in tab returns the page to its normal content.
+  document.addEventListener('click', event => {
+    const link = event.target.closest('a');
+    if (!link || link.id === TAB_ID) return;
+    const tabs = findTabs();
+    if (tabs && tabs.contains(link)) setWatchActive(false);
+  }, true);
+
+  let queued = false;
+  const scheduleRender = () => {
+    if (queued) return;
+    queued = true;
+    requestAnimationFrame(() => {
+      queued = false;
+      render();
+    });
+  };
 
   const observer = new MutationObserver(scheduleRender);
   observer.observe(document.documentElement, { childList: true, subtree: true });
-
   window.addEventListener('popstate', scheduleRender);
   scheduleRender();
 })();
