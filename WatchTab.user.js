@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         AniList Watch Tab
 // @namespace    https://github.com/wdysln9-ux/WatchTab
-// @version      0.5.3
-// @description  Adds an AniList-aligned Watch tab with episode metadata from AniZip.
+// @version      0.6.0
+// @description  Shows AniZip episode metadata after strict AniList adult-content checks.
 // @updateURL    https://raw.githubusercontent.com/wdysln9-ux/WatchTab/main/WatchTab.user.js
 // @downloadURL  https://raw.githubusercontent.com/wdysln9-ux/WatchTab/main/WatchTab.user.js
 // @match        https://anilist.co/*
@@ -172,22 +172,43 @@
     return Number.isNaN(parsed.getTime()) ? null : parsed;
   };
 
-  const getAniListEpisodeCount = async animeId => {
+  // Fail closed: episode metadata is shown only after AniList confirms
+  // the title is not marked as adult and has no adult-content genre/tag.
+  const getAniListMediaSafety = async animeId => {
     try {
       const response = await fetch('https://graphql.anilist.co', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
         body: JSON.stringify({
-          query: 'query ($id: Int) { Media(id: $id, type: ANIME) { episodes } }',
+          query: 'query ($id: Int) { Media(id: $id, type: ANIME) { episodes isAdult genres tags { name isAdult } } }',
           variables: { id: Number(animeId) }
         })
       });
-      if (!response.ok) return null;
+      if (!response.ok) return { safe: false, reason: 'Pemeriksaan keamanan AniList gagal. Episode disembunyikan.' };
       const json = await response.json();
-      const count = Number(json?.data?.Media?.episodes);
-      return Number.isInteger(count) && count > 0 ? count : null;
+      const media = json?.data?.Media;
+      if (!media) return { safe: false, reason: 'Data keamanan anime tidak tersedia. Episode disembunyikan.' };
+
+      const adultGenres = new Set(['ecchi', 'hentai', 'erotica']);
+      const adultTagPattern = /adult content|explicit sex|sexual content|nudity|nsfw|hentai|ecchi/i;
+      const genres = Array.isArray(media.genres) ? media.genres : [];
+      const tags = Array.isArray(media.tags) ? media.tags : [];
+      const blockedGenre = genres.find(genre => adultGenres.has(String(genre).trim().toLowerCase()));
+      const blockedTag = tags.find(tag =>
+        tag && (tag.isAdult === true || adultTagPattern.test(String(tag.name || '')))
+      );
+
+      if (media.isAdult === true || blockedGenre || blockedTag) {
+        return { safe: false, reason: 'Konten ini ditandai dewasa atau memiliki kategori sensitif. Daftar episode disembunyikan.' };
+      }
+
+      const count = Number(media.episodes);
+      return {
+        safe: true,
+        episodeCount: Number.isInteger(count) && count > 0 ? count : null
+      };
     } catch (_) {
-      return null;
+      return { safe: false, reason: 'Pemeriksaan keamanan tidak dapat dilakukan. Episode disembunyikan.' };
     }
   };
 
@@ -293,14 +314,20 @@
       }
 
       if (getAnimeId() !== animeId) return;
+
+      // Verify AniList safety metadata before requesting/rendering episode listings.
+      const safety = await getAniListMediaSafety(animeId);
+      if (getAnimeId() !== animeId) return;
+      if (!safety.safe) {
+        panel.replaceChildren(makeMessage(safety.reason));
+        return;
+      }
+
       if (!episodeData) {
         throw lastError || new Error('AniZip tidak menyediakan data episode untuk anime ini.');
       }
 
-      const episodeLimit = await getAniListEpisodeCount(animeId);
-      if (getAnimeId() !== animeId) return;
-
-      const episodes = getReleasedUniqueEpisodes(episodeData, episodeLimit);
+      const episodes = getReleasedUniqueEpisodes(episodeData, safety.episodeCount);
       renderEpisodes(panel, episodes);
       if (!episodes.length) requestAnimeId = null;
     } catch (error) {
