@@ -172,8 +172,7 @@
     return Number.isNaN(parsed.getTime()) ? null : parsed;
   };
 
-  // Fail closed: episode metadata is shown only after AniList confirms
-  // the title is not marked as adult and has no adult-content genre/tag.
+  // Fail closed: require complete AniList moderation metadata before showing any episodes.
   const getAniListMediaSafety = async animeId => {
     try {
       const response = await fetch('https://graphql.anilist.co', {
@@ -189,17 +188,31 @@
       const media = json?.data?.Media;
       if (!media) return { safe: false, reason: 'Data keamanan anime tidak tersedia. Episode disembunyikan.' };
 
+      // Missing or malformed moderation fields must never be treated as safe.
+      if (typeof media.isAdult !== 'boolean' ||
+          !Array.isArray(media.genres) ||
+          !Array.isArray(media.tags) ||
+          media.genres.some(genre => typeof genre !== 'string') ||
+          media.tags.some(tag => !tag || typeof tag.name !== 'string' || typeof tag.isAdult !== 'boolean')) {
+        return { safe: false, reason: 'Metadata keamanan belum lengkap. Episode disembunyikan demi keamanan.' };
+      }
+
+      const normalizeSafetyLabel = value => String(value || '')
+        .normalize('NFKC')
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, ' ')
+        .trim();
+
       const adultGenres = new Set(['ecchi', 'hentai', 'erotica']);
-      const adultTagPattern = /adult content|explicit sex|sexual content|nudity|nsfw|hentai|ecchi/i;
-      const genres = Array.isArray(media.genres) ? media.genres : [];
-      const tags = Array.isArray(media.tags) ? media.tags : [];
-      const blockedGenre = genres.find(genre => adultGenres.has(String(genre).trim().toLowerCase()));
-      const blockedTag = tags.find(tag =>
-        tag && (tag.isAdult === true || adultTagPattern.test(String(tag.name || '')))
+      const blockedTagPattern = /(?:^| )(?:adult content|explicit sex|sexual content|sexual violence|nudity|nsfw|hentai|ecchi|erotica|pornography|rape|incest|bestiality|fetish|bondage|prostitution|sex work|fanservice|fan service|lewd)(?: |$)/i;
+      const genres = media.genres.map(normalizeSafetyLabel);
+      const blockedGenre = genres.find(genre => adultGenres.has(genre));
+      const blockedTag = media.tags.find(tag =>
+        tag.isAdult === true || blockedTagPattern.test(normalizeSafetyLabel(tag.name))
       );
 
       if (media.isAdult === true || blockedGenre || blockedTag) {
-        return { safe: false, reason: 'Konten ini ditandai dewasa atau memiliki kategori sensitif. Daftar episode disembunyikan.' };
+        return { safe: false, reason: 'Konten ini memiliki penanda dewasa atau kategori sensitif. Daftar episode disembunyikan.' };
       }
 
       const count = Number(media.episodes);
