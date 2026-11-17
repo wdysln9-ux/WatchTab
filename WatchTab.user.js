@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AniList Watch Tab
 // @namespace    https://github.com/wdysln9-ux/WatchTab
-// @version      0.2.1
+// @version      0.3.0
 // @description  Adds a native-looking Watch tab to AniList anime pages.
 // @updateURL    https://raw.githubusercontent.com/wdysln9-ux/WatchTab/main/WatchTab.user.js
 // @downloadURL  https://raw.githubusercontent.com/wdysln9-ux/WatchTab/main/WatchTab.user.js
@@ -23,18 +23,35 @@
     return match ? match[1] : null;
   };
 
+  const normalize = value => (value || '').replace(/\\s+/g, ' ').trim().toLowerCase();
+
+  // Find the smallest shared container holding AniList's real anime tabs.
   const findTabs = () => {
-    const candidates = [...document.querySelectorAll('.nav, .nav-wrap, nav')].sort((a, b) => a.querySelectorAll('.link').length - b.querySelectorAll('.link').length);
-    return candidates.find(node => {
-      const text = (node.innerText || '').toLowerCase();
-      return text.includes('overview') && (text.includes('character') || text.includes('staff') || text.includes('stats'));
-    }) || null;
+    const links = [...document.querySelectorAll('a.link, .nav a, nav a')];
+    const overview = links.find(link => normalize(link.textContent) === 'overview');
+    if (!overview) return null;
+
+    let node = overview.parentElement;
+    for (let depth = 0; node && depth < 5; depth++, node = node.parentElement) {
+      const labels = [...node.querySelectorAll('a')].map(link => normalize(link.textContent));
+      if (labels.includes('overview') &&
+          labels.some(label => /^(characters?|staff|stats|reviews?|recommendations?)$/.test(label))) {
+        return node;
+      }
+    }
+    return overview.parentElement;
   };
 
-  const findContent = () =>
-    document.querySelector('.media .content') ||
-    document.querySelector('.media .overview') ||
-    document.querySelector('.media');
+  const findMediaRoot = () => {
+    const tabs = findTabs();
+    return tabs?.closest('.media') || document.querySelector('.media');
+  };
+
+  const findTabBranch = (tabs, root) => {
+    let branch = tabs;
+    while (branch.parentElement && branch.parentElement !== root) branch = branch.parentElement;
+    return branch;
+  };
 
   const addStyles = () => {
     if (document.getElementById(STYLE_ID)) return;
@@ -46,14 +63,23 @@
       #${PANEL_ID} {
         display: none;
         width: 100%;
+        min-height: 240px;
+        box-sizing: border-box;
         color: var(--color-text, inherit);
         font: inherit;
+        padding: 24px 0;
       }
       #${PANEL_ID}.is-active { display: block; }
-      #${PANEL_ID} .watchtab-placeholder {
-        color: var(--color-text-lighter, #9ba4b4);
-        padding: 12px 0;
+      #${PANEL_ID} .watchtab-heading {
+        font-size: 1.25rem;
+        font-weight: 600;
+        margin: 0 0 18px;
       }
+      #${PANEL_ID} .watchtab-empty {
+        color: var(--color-text-lighter, #9ba4b4);
+        padding: 20px 0;
+      }
+      .watchtab-page-hidden { display: none !important; }
     `;
     document.head.appendChild(style);
   };
@@ -61,15 +87,20 @@
   const setWatchActive = active => {
     const panel = document.getElementById(PANEL_ID);
     const tab = document.getElementById(TAB_ID);
-    const content = findContent();
-    if (!panel || !tab || !content) return;
+    const tabs = findTabs();
+    const root = findMediaRoot();
+    if (!panel || !tab || !tabs || !root) return;
 
+    const tabBranch = findTabBranch(tabs, root);
     tab.classList.toggle('active', active);
     tab.setAttribute('aria-current', active ? 'page' : 'false');
     panel.classList.toggle('is-active', active);
 
-    [...content.children].forEach(child => {
-      if (child !== panel) child.style.display = active ? 'none' : '';
+    // Keep the anime header and native tab row; replace the entire page body.
+    [...root.children].forEach(child => {
+      if (child === tabBranch || child.contains(tabBranch) || child === panel) return;
+      const isHeader = child.matches('.header-wrap, .header, .banner');
+      child.classList.toggle('watchtab-page-hidden', active && !isHeader);
     });
   };
 
@@ -78,13 +109,14 @@
     if (!animeId) {
       document.getElementById(TAB_ID)?.remove();
       document.getElementById(PANEL_ID)?.remove();
+      document.querySelectorAll('.watchtab-page-hidden').forEach(node => node.classList.remove('watchtab-page-hidden'));
       currentAnimeId = null;
       return;
     }
 
     const tabs = findTabs();
-    const content = findContent();
-    if (!tabs || !content) return;
+    const root = findMediaRoot();
+    if (!tabs || !root) return;
 
     addStyles();
 
@@ -99,25 +131,24 @@
         event.preventDefault();
         setWatchActive(true);
       });
-      tabs.appendChild(tab);
     }
+
+    // Place Watch alongside Overview / Characters / Staff / Stats.
+    if (tab.parentElement !== tabs) tabs.appendChild(tab);
 
     let panel = document.getElementById(PANEL_ID);
     if (!panel) {
       panel = document.createElement('section');
       panel.id = PANEL_ID;
       panel.innerHTML = `
-        <div class="watchtab-placeholder">
-          Tab Watch berhasil dimuat untuk anime AniList #${animeId}.
-          Daftar episode dan thumbnail akan ditambahkan pada tahap berikutnya.
-        </div>
+        <h2 class="watchtab-heading">Episode</h2>
+        <div class="watchtab-empty">Daftar episode akan ditampilkan di sini.</div>
       `;
-      content.appendChild(panel);
     }
-
-    // Keep the custom tab in the native navigation if AniList re-renders it.
-    if (tab.parentElement !== tabs) tabs.appendChild(tab);
-    if (panel.parentElement !== content) content.appendChild(panel);
+    if (panel.parentElement !== root) {
+      const tabBranch = findTabBranch(tabs, root);
+      tabBranch.insertAdjacentElement('afterend', panel);
+    }
 
     if (currentAnimeId !== animeId) {
       currentAnimeId = animeId;
