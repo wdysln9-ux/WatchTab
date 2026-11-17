@@ -151,15 +151,16 @@
       const title = episode.title && typeof episode.title === 'object'
         ? (episode.title.en || episode.title['x-jat'] || episode.title.ja || episode.title.native || '')
         : String(episode.title || '');
+      const normalizedTitle = title.trim().toLowerCase().replace(/\\s+/g, ' ');
       const date = String(episode.airDateUtc || episode.airDate || episode.airdate || '').slice(0, 10);
-      const identity = episode.tvdbId || episode.anidbEid || episode.episode || '';
-      const fingerprint = identity
-        ? 'id:' + identity
-        : date && title
-          ? 'date-title:' + date + '|' + title.trim().toLowerCase().replace(/\\s+/g, ' ')
-          : 'number-title:' + episode.sourceNumber + '|' + title.trim().toLowerCase();
-      if (seen.has(fingerprint)) return false;
-      seen.add(fingerprint);
+      const keys = [];
+      const identity = episode.tvdbId || episode.anidbEid || episode.episode;
+      if (identity) keys.push('id:' + identity);
+      if (date && normalizedTitle) keys.push('date-title:' + date + '|' + normalizedTitle);
+      if (date) keys.push('date-number:' + date + '|' + episode.sourceNumber);
+      if (!keys.length) keys.push('number-title:' + episode.sourceNumber + '|' + normalizedTitle);
+      if (keys.some(key => seen.has(key))) return false;
+      keys.forEach(key => seen.add(key));
       return true;
     });
   };
