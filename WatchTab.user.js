@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         AniList Watch Tab
 // @namespace    https://github.com/wdysln9-ux/WatchTab
-// @version      0.3.2
-// @description  Adds a native-looking Watch tab to AniList anime pages.
+// @version      0.4.0
+// @description  Adds an AniList-aligned Watch tab with episode metadata from AniZip.
 // @updateURL    https://raw.githubusercontent.com/wdysln9-ux/WatchTab/main/WatchTab.user.js
 // @downloadURL  https://raw.githubusercontent.com/wdysln9-ux/WatchTab/main/WatchTab.user.js
 // @match        https://anilist.co/*
@@ -17,17 +17,17 @@
   const PANEL_ID = 'watchtab-content';
   const STYLE_ID = 'watchtab-style';
   let currentAnimeId = null;
+  let requestAnimeId = null;
 
   const getAnimeId = () => {
-    const match = location.pathname.match(/^\/anime\/(\d+)/);
+    const match = location.pathname.match(/^\\/anime\\/(\\d+)/);
     return match ? match[1] : null;
   };
 
   const normalize = value => (value || '').replace(/\\s+/g, ' ').trim().toLowerCase();
 
-  // Find the smallest shared container holding AniList's real anime tabs.
   const findTabs = () => {
-    const links = [...document.querySelectorAll('a.link, .nav a, nav a')];
+    const links = [...document.querySelectorAll('.nav a.link, .nav-wrap a.link, nav a.link')];
     const overview = links.find(link => normalize(link.textContent) === 'overview');
     if (!overview) return null;
 
@@ -42,10 +42,7 @@
     return overview.parentElement;
   };
 
-  const findMediaRoot = () => {
-    const tabs = findTabs();
-    return tabs?.closest('.media') || document.querySelector('.media');
-  };
+  const findMediaRoot = () => findTabs()?.closest('.media') || document.querySelector('.media');
 
   const findTabBranch = (tabs, root) => {
     let branch = tabs;
@@ -53,35 +50,156 @@
     return branch;
   };
 
+  // Use AniList's own content container so its max-width and page gutters stay untouched.
+  const findPageContainer = (root, tabBranch) => {
+    const siblings = [...root.children];
+    const tabIndex = siblings.indexOf(tabBranch);
+    const afterNav = tabIndex >= 0 ? siblings.slice(tabIndex + 1) : [];
+    return afterNav.find(node => node.classList.contains('container')) ||
+      siblings.find(node => node.classList.contains('container') && !node.contains(tabBranch)) ||
+      root.querySelector('.container');
+  };
+
   const addStyles = () => {
     if (document.getElementById(STYLE_ID)) return;
     const style = document.createElement('style');
     style.id = STYLE_ID;
     style.textContent = `
-      #${TAB_ID} { cursor: pointer; display: inline-flex; align-items: center; align-self: stretch; vertical-align: middle; line-height: inherit; }
-      #${TAB_ID}.active { color: var(--color-blue, #3db4f2) !important; }
-      #${PANEL_ID} {
-        display: none;
-        width: 100%;
-        min-height: 240px;
-        box-sizing: border-box;
-        color: var(--color-text, inherit);
-        font: inherit;
-        padding: 24px 0;
+      #${TAB_ID} { cursor: pointer; }
+      #${TAB_ID}.router-link-active,
+      #${TAB_ID}.router-link-exact-active {
+        color: rgb(var(--color-blue)) !important;
       }
+      #${PANEL_ID} { display: none; width: 100%; box-sizing: border-box; }
       #${PANEL_ID}.is-active { display: block; }
-      #${PANEL_ID} .watchtab-heading {
-        font-size: 1.25rem;
+      #${PANEL_ID} .watchtab-episodes {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(min(100%, 230px), 1fr));
+        gap: 16px;
+        align-items: start;
+      }
+      #${PANEL_ID} .watchtab-episode {
+        min-width: 0;
+        overflow: hidden;
+        border-radius: 3px;
+        background: rgb(var(--color-foreground));
+      }
+      #${PANEL_ID} .watchtab-thumb {
+        display: block;
+        width: 100%;
+        aspect-ratio: 16 / 9;
+        object-fit: cover;
+        background: rgb(var(--color-foreground-grey));
+      }
+      #${PANEL_ID} .watchtab-episode-info { padding: 10px 12px 12px; }
+      #${PANEL_ID} .watchtab-episode-number {
+        color: rgb(var(--color-blue));
+        font-size: 1.1rem;
         font-weight: 600;
-        margin: 0 0 18px;
+        margin-bottom: 4px;
       }
-      #${PANEL_ID} .watchtab-empty {
-        color: var(--color-text-lighter, #9ba4b4);
-        padding: 20px 0;
+      #${PANEL_ID} .watchtab-episode-title {
+        color: rgb(var(--color-text));
+        font-size: 1.3rem;
+        line-height: 1.4;
+        overflow-wrap: anywhere;
       }
+      #${PANEL_ID} .watchtab-episode-date,
+      #${PANEL_ID} .watchtab-message {
+        color: rgb(var(--color-text-lighter));
+        font-size: 1.2rem;
+        margin-top: 6px;
+      }
+      #${PANEL_ID} .watchtab-message { padding: 8px 0; }
       .watchtab-page-hidden { display: none !important; }
     `;
     document.head.appendChild(style);
+  };
+
+  const makeMessage = text => {
+    const message = document.createElement('div');
+    message.className = 'watchtab-message';
+    message.textContent = text;
+    return message;
+  };
+
+  const renderEpisodes = (panel, data) => {
+    panel.replaceChildren();
+    const episodes = data && data.episodes && typeof data.episodes === 'object'
+      ? Object.entries(data.episodes).map(([key, episode]) => ({
+          ...episode,
+          number: Number(episode.episodeNumber || key)
+        })).filter(episode => Number.isFinite(episode.number))
+        .sort((a, b) => a.number - b.number)
+      : [];
+
+    if (!episodes.length) {
+      panel.appendChild(makeMessage('Belum ada data episode dari AniZip untuk anime ini.'));
+      return;
+    }
+
+    const grid = document.createElement('div');
+    grid.className = 'watchtab-episodes';
+    for (const episode of episodes) {
+      const card = document.createElement('article');
+      card.className = 'watchtab-episode';
+
+      if (episode.image) {
+        const image = document.createElement('img');
+        image.className = 'watchtab-thumb';
+        image.loading = 'lazy';
+        image.src = episode.image;
+        image.alt = '';
+        image.referrerPolicy = 'no-referrer';
+        card.appendChild(image);
+      }
+
+      const info = document.createElement('div');
+      info.className = 'watchtab-episode-info';
+
+      const number = document.createElement('div');
+      number.className = 'watchtab-episode-number';
+      number.textContent = `Episode ${episode.number}`;
+      info.appendChild(number);
+
+      const titles = episode.title || {};
+      const title = document.createElement('div');
+      title.className = 'watchtab-episode-title';
+      title.textContent = titles.en || titles['x-jat'] || titles.ja || titles.native || 'Episode ' + episode.number;
+      info.appendChild(title);
+
+      const dateValue = episode.airDate || episode.airdate;
+      if (dateValue) {
+        const date = document.createElement('div');
+        date.className = 'watchtab-episode-date';
+        const parsed = new Date(dateValue);
+        date.textContent = Number.isNaN(parsed.getTime()) ? dateValue : parsed.toLocaleDateString('id-ID', {
+          day: 'numeric', month: 'short', year: 'numeric'
+        });
+        info.appendChild(date);
+      }
+
+      card.appendChild(info);
+      grid.appendChild(card);
+    }
+    panel.appendChild(grid);
+  };
+
+  const loadEpisodes = async (animeId, panel) => {
+    if (requestAnimeId === animeId) return;
+    requestAnimeId = animeId;
+    panel.replaceChildren(makeMessage('Memuat daftar episode…'));
+    try {
+      const response = await fetch(`https://api.ani.zip/v1/episodes?anilist_id=${encodeURIComponent(animeId)}`);
+      if (!response.ok) throw new Error('AniZip response ' + response.status);
+      const data = await response.json();
+      if (getAnimeId() !== animeId) return;
+      renderEpisodes(panel, data);
+    } catch (error) {
+      if (getAnimeId() !== animeId) return;
+      panel.replaceChildren(makeMessage('Data episode gagal dimuat. Coba buka ulang tab Watch.'));
+      requestAnimeId = null;
+    }
   };
 
   const setWatchActive = active => {
@@ -92,16 +210,19 @@
     if (!panel || !tab || !tabs || !root) return;
 
     const tabBranch = findTabBranch(tabs, root);
-    tab.classList.toggle('active', active);
+    const pageContainer = findPageContainer(root, tabBranch);
+    if (!pageContainer) return;
+
+    tab.classList.toggle('router-link-active', active);
+    tab.classList.toggle('router-link-exact-active', active);
     tab.setAttribute('aria-current', active ? 'page' : 'false');
     panel.classList.toggle('is-active', active);
 
-    // Keep the anime header and native tab row; replace the entire page body.
-    [...root.children].forEach(child => {
-      if (child === tabBranch || child.contains(tabBranch) || child === panel) return;
-      const isHeader = child.matches('.header-wrap, .header, .banner');
-      child.classList.toggle('watchtab-page-hidden', active && !isHeader);
+    [...pageContainer.children].forEach(child => {
+      if (child === panel) return;
+      child.classList.toggle('watchtab-page-hidden', active);
     });
+    if (active) loadEpisodes(getAnimeId(), panel);
   };
 
   const render = () => {
@@ -111,54 +232,52 @@
       document.getElementById(PANEL_ID)?.remove();
       document.querySelectorAll('.watchtab-page-hidden').forEach(node => node.classList.remove('watchtab-page-hidden'));
       currentAnimeId = null;
+      requestAnimeId = null;
       return;
     }
 
     const tabs = findTabs();
     const root = findMediaRoot();
     if (!tabs || !root) return;
+    const tabBranch = findTabBranch(tabs, root);
+    const pageContainer = findPageContainer(root, tabBranch);
+    if (!pageContainer) return;
 
     addStyles();
 
     const overviewTab = [...tabs.querySelectorAll('a')].find(link => normalize(link.textContent) === 'overview');
+    if (!overviewTab) return;
+
     let tab = document.getElementById(TAB_ID);
     if (!tab) {
-      tab = document.createElement('a');
+      tab = overviewTab.cloneNode(false);
       tab.id = TAB_ID;
-      tab.className = overviewTab?.className || 'link';
       tab.href = '#watch';
       tab.textContent = 'Watch';
+      tab.classList.remove('router-link-active', 'router-link-exact-active');
+      tab.removeAttribute('aria-current');
       tab.addEventListener('click', event => {
         event.preventDefault();
         setWatchActive(true);
       });
     }
-
-    // Keep Watch immediately after Overview, using the same native tab styling.
-    if (overviewTab && overviewTab.nextElementSibling !== tab) overviewTab.insertAdjacentElement('afterend', tab);
-    else if (!overviewTab && tab.parentElement !== tabs) tabs.appendChild(tab);
+    if (overviewTab.nextElementSibling !== tab) overviewTab.insertAdjacentElement('afterend', tab);
 
     let panel = document.getElementById(PANEL_ID);
     if (!panel) {
       panel = document.createElement('section');
       panel.id = PANEL_ID;
-      panel.innerHTML = `
-        <h2 class="watchtab-heading">Episode</h2>
-        <div class="watchtab-empty">Daftar episode akan ditampilkan di sini.</div>
-      `;
+      panel.appendChild(makeMessage('Pilih tab Watch untuk melihat episode.'));
     }
-    if (panel.parentElement !== root) {
-      const tabBranch = findTabBranch(tabs, root);
-      tabBranch.insertAdjacentElement('afterend', panel);
-    }
+    if (panel.parentElement !== pageContainer) pageContainer.appendChild(panel);
 
     if (currentAnimeId !== animeId) {
       currentAnimeId = animeId;
+      requestAnimeId = null;
       setWatchActive(false);
     }
   };
 
-  // Selecting any built-in tab returns the page to its normal content.
   document.addEventListener('click', event => {
     const link = event.target.closest('a');
     if (!link || link.id === TAB_ID) return;
