@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AniList Watch Tab
 // @namespace    https://github.com/wdysln9-ux/WatchTab
-// @version      0.4.2
+// @version      0.5.0
 // @description  Adds an AniList-aligned Watch tab with episode metadata from AniZip.
 // @updateURL    https://raw.githubusercontent.com/wdysln9-ux/WatchTab/main/WatchTab.user.js
 // @downloadURL  https://raw.githubusercontent.com/wdysln9-ux/WatchTab/main/WatchTab.user.js
@@ -125,33 +125,98 @@
 
   const extractEpisodes = data => {
     const collection = data?.episodes ?? data?.episodesInfo ?? data?.data?.episodes ?? data?.data?.episodesInfo;
+    let episodes = [];
     if (Array.isArray(collection)) {
-      return collection.map((episode, index) => ({
+      episodes = collection.map((episode, index) => ({
         ...episode,
-        number: Number(episode.episodeNumber ?? episode.number ?? index + 1)
-      })).filter(episode => Number.isFinite(episode.number));
-    }
-    if (collection && typeof collection === 'object') {
-      return Object.entries(collection).map(([key, episode]) => ({
+        sourceNumber: Number(episode?.episodeNumber ?? episode?.number ?? index + 1)
+      }));
+    } else if (collection && typeof collection === 'object') {
+      episodes = Object.entries(collection).map(([key, episode]) => ({
         ...episode,
-        number: Number(episode?.episodeNumber ?? episode?.number ?? key)
-      })).filter(episode => Number.isFinite(episode.number));
+        sourceNumber: Number(episode?.episodeNumber ?? episode?.number ?? key)
+      }));
     }
-    return [];
+
+    // Remove specials/recaps and malformed entries before de-duplicating.
+    episodes = episodes.filter(episode =>
+      Number.isFinite(episode.sourceNumber) &&
+      episode.seasonNumber !== 0 &&
+      episode.isSpecial !== true &&
+      String(episode.type || '').toUpperCase() !== 'SPECIAL'
+    );
+
+    const seen = new Set();
+    return episodes.filter(episode => {
+      const title = episode.title && typeof episode.title === 'object'
+        ? (episode.title.en || episode.title['x-jat'] || episode.title.ja || episode.title.native || '')
+        : String(episode.title || '');
+      const date = String(episode.airDateUtc || episode.airDate || episode.airdate || '').slice(0, 10);
+      const identity = episode.tvdbId || episode.anidbEid || episode.episode || '';
+      const fingerprint = identity
+        ? 'id:' + identity
+        : date && title
+          ? 'date-title:' + date + '|' + title.trim().toLowerCase().replace(/\\s+/g, ' ')
+          : 'number-title:' + episode.sourceNumber + '|' + title.trim().toLowerCase();
+      if (seen.has(fingerprint)) return false;
+      seen.add(fingerprint);
+      return true;
+    });
   };
 
-  const renderEpisodes = (panel, data) => {
-    panel.replaceChildren();
-    const episodes = extractEpisodes(data).sort((a, b) => a.number - b.number);
+  const getAirDate = episode => {
+    const value = episode.airDateUtc || episode.airDate || episode.airdate;
+    if (!value) return null;
+    const parsed = new Date(value);
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
+  };
 
+  const getAniListEpisodeCount = async animeId => {
+    try {
+      const response = await fetch('https://graphql.anilist.co', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+        body: JSON.stringify({
+          query: 'query ($id: Int) { Media(id: $id, type: ANIME) { episodes } }',
+          variables: { id: Number(animeId) }
+        })
+      });
+      if (!response.ok) return null;
+      const json = await response.json();
+      const count = Number(json?.data?.Media?.episodes);
+      return Number.isInteger(count) && count > 0 ? count : null;
+    } catch (_) {
+      return null;
+    }
+  };
+
+  const getReleasedUniqueEpisodes = (data, episodeLimit) => {
+    const now = new Date();
+    const unique = extractEpisodes(data)
+      .filter(episode => {
+        const airDate = getAirDate(episode);
+        // Keep entries with unknown dates, but never show an explicitly future-dated episode.
+        return !airDate || airDate.getTime() <= now.getTime();
+      })
+      .sort((a, b) => {
+        const da = getAirDate(a)?.getTime() ?? Number.MAX_SAFE_INTEGER;
+        const db = getAirDate(b)?.getTime() ?? Number.MAX_SAFE_INTEGER;
+        return da - db || a.sourceNumber - b.sourceNumber;
+      });
+    return episodeLimit ? unique.slice(0, episodeLimit) : unique;
+  };
+
+  const renderEpisodes = (panel, episodes) => {
+    panel.replaceChildren();
     if (!episodes.length) {
-      panel.appendChild(makeMessage('Belum ada data episode dari AniZip untuk anime ini.'));
+      panel.appendChild(makeMessage('Belum ada episode yang sudah tayang untuk anime ini.'));
       return;
     }
 
     const grid = document.createElement('div');
     grid.className = 'watchtab-episodes';
-    for (const episode of episodes) {
+    episodes.forEach((episode, index) => {
+      const displayNumber = index + 1;
       const card = document.createElement('article');
       card.className = 'watchtab-episode';
 
@@ -170,16 +235,18 @@
 
       const number = document.createElement('div');
       number.className = 'watchtab-episode-number';
-      number.textContent = `Episode ${episode.number}`;
+      number.textContent = `Episode ${displayNumber}`;
       info.appendChild(number);
 
       const titles = episode.title || {};
       const title = document.createElement('div');
       title.className = 'watchtab-episode-title';
-      title.textContent = titles.en || titles['x-jat'] || titles.ja || titles.native || 'Episode ' + episode.number;
+      title.textContent = (typeof titles === 'object'
+        ? (titles.en || titles['x-jat'] || titles.ja || titles.native)
+        : titles) || 'Episode ' + displayNumber;
       info.appendChild(title);
 
-      const dateValue = episode.airDate || episode.airdate;
+      const dateValue = episode.airDate || episode.airDateUtc || episode.airdate;
       if (dateValue) {
         const date = document.createElement('div');
         date.className = 'watchtab-episode-date';
@@ -192,7 +259,7 @@
 
       card.appendChild(info);
       grid.appendChild(card);
-    }
+    });
     panel.appendChild(grid);
   };
 
@@ -201,40 +268,22 @@
     requestAnimeId = animeId;
     panel.replaceChildren(makeMessage('Memuat daftar episode…'));
 
-    // AniZip's mappings endpoint is the canonical AniList-ID lookup.
-    // The alternate v1 endpoint is used only if the mappings response has no episode list.
-    const urls = [
-      `https://api.ani.zip/mappings?anilist_id=${encodeURIComponent(animeId)}`,
-      `https://hayase.ani.zip/v1/episodes?anilist_id=${encodeURIComponent(animeId)}`
-    ];
-
     try {
-      let episodeData = null;
-      let lastError = null;
-      for (const url of urls) {
-        try {
-          const response = await fetch(url, { method: 'GET', mode: 'cors' });
-          if (!response.ok) throw new Error(`AniZip HTTP ${response.status}`);
-          const data = await response.json();
-          if (extractEpisodes(data).length) {
-            episodeData = data;
-            break;
-          }
-        } catch (error) {
-          lastError = error;
-        }
-      }
-
+      // Use AniZip's documented episode endpoint, not the mappings-only endpoint.
+      const response = await fetch(`https://hayase.ani.zip/v1/episodes?anilist_id=${encodeURIComponent(animeId)}`, {
+        method: 'GET',
+        mode: 'cors'
+      });
+      if (!response.ok) throw new Error(`AniZip HTTP ${response.status}`);
+      const data = await response.json();
       if (getAnimeId() !== animeId) return;
-      if (episodeData) {
-        renderEpisodes(panel, episodeData);
-      } else {
-        const message = lastError
-          ? 'AniZip tidak bisa diakses dari browser ini. Coba lagi nanti.'
-          : 'AniZip belum menyediakan metadata episode untuk anime ini.';
-        panel.replaceChildren(makeMessage(message));
-        requestAnimeId = null;
-      }
+
+      const episodeLimit = await getAniListEpisodeCount(animeId);
+      if (getAnimeId() !== animeId) return;
+
+      const episodes = getReleasedUniqueEpisodes(data, episodeLimit);
+      renderEpisodes(panel, episodes);
+      if (!episodes.length) requestAnimeId = null;
     } catch (error) {
       if (getAnimeId() !== animeId) return;
       panel.replaceChildren(makeMessage('Gagal memuat episode. Periksa koneksi lalu coba lagi.'));
