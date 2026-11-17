@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AniList Watch Tab
 // @namespace    https://github.com/wdysln9-ux/WatchTab
-// @version      0.4.1
+// @version      0.4.2
 // @description  Adds an AniList-aligned Watch tab with episode metadata from AniZip.
 // @updateURL    https://raw.githubusercontent.com/wdysln9-ux/WatchTab/main/WatchTab.user.js
 // @downloadURL  https://raw.githubusercontent.com/wdysln9-ux/WatchTab/main/WatchTab.user.js
@@ -123,15 +123,26 @@
     return message;
   };
 
+  const extractEpisodes = data => {
+    const collection = data?.episodes ?? data?.episodesInfo ?? data?.data?.episodes ?? data?.data?.episodesInfo;
+    if (Array.isArray(collection)) {
+      return collection.map((episode, index) => ({
+        ...episode,
+        number: Number(episode.episodeNumber ?? episode.number ?? index + 1)
+      })).filter(episode => Number.isFinite(episode.number));
+    }
+    if (collection && typeof collection === 'object') {
+      return Object.entries(collection).map(([key, episode]) => ({
+        ...episode,
+        number: Number(episode?.episodeNumber ?? episode?.number ?? key)
+      })).filter(episode => Number.isFinite(episode.number));
+    }
+    return [];
+  };
+
   const renderEpisodes = (panel, data) => {
     panel.replaceChildren();
-    const episodes = data && data.episodes && typeof data.episodes === 'object'
-      ? Object.entries(data.episodes).map(([key, episode]) => ({
-          ...episode,
-          number: Number(episode.episodeNumber || key)
-        })).filter(episode => Number.isFinite(episode.number))
-        .sort((a, b) => a.number - b.number)
-      : [];
+    const episodes = extractEpisodes(data).sort((a, b) => a.number - b.number);
 
     if (!episodes.length) {
       panel.appendChild(makeMessage('Belum ada data episode dari AniZip untuk anime ini.'));
@@ -189,15 +200,44 @@
     if (requestAnimeId === animeId) return;
     requestAnimeId = animeId;
     panel.replaceChildren(makeMessage('Memuat daftar episode…'));
+
+    // AniZip's mappings endpoint is the canonical AniList-ID lookup.
+    // The alternate v1 endpoint is used only if the mappings response has no episode list.
+    const urls = [
+      `https://api.ani.zip/mappings?anilist_id=${encodeURIComponent(animeId)}`,
+      `https://hayase.ani.zip/v1/episodes?anilist_id=${encodeURIComponent(animeId)}`
+    ];
+
     try {
-      const response = await fetch(`https://api.ani.zip/v1/episodes?anilist_id=${encodeURIComponent(animeId)}`);
-      if (!response.ok) throw new Error('AniZip response ' + response.status);
-      const data = await response.json();
+      let episodeData = null;
+      let lastError = null;
+      for (const url of urls) {
+        try {
+          const response = await fetch(url, { method: 'GET', mode: 'cors' });
+          if (!response.ok) throw new Error(`AniZip HTTP ${response.status}`);
+          const data = await response.json();
+          if (extractEpisodes(data).length) {
+            episodeData = data;
+            break;
+          }
+        } catch (error) {
+          lastError = error;
+        }
+      }
+
       if (getAnimeId() !== animeId) return;
-      renderEpisodes(panel, data);
+      if (episodeData) {
+        renderEpisodes(panel, episodeData);
+      } else {
+        const message = lastError
+          ? 'AniZip tidak bisa diakses dari browser ini. Coba lagi nanti.'
+          : 'AniZip belum menyediakan metadata episode untuk anime ini.';
+        panel.replaceChildren(makeMessage(message));
+        requestAnimeId = null;
+      }
     } catch (error) {
       if (getAnimeId() !== animeId) return;
-      panel.replaceChildren(makeMessage('Data episode gagal dimuat. Coba buka ulang tab Watch.'));
+      panel.replaceChildren(makeMessage('Gagal memuat episode. Periksa koneksi lalu coba lagi.'));
       requestAnimeId = null;
     }
   };
