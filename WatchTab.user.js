@@ -20,11 +20,11 @@
   let requestAnimeId = null;
 
   const getAnimeId = () => {
-    const match = location.pathname.match(/^\\/anime\\/(\\d+)/);
+    const match = location.pathname.match(/^\/anime\/(\d+)/);
     return match ? match[1] : null;
   };
 
-  const normalize = value => (value || '').replace(/\\s+/g, ' ').trim().toLowerCase();
+  const normalize = value => (value || '').replace(/\s+/g, ' ').trim().toLowerCase();
 
   const findTabs = () => {
     const links = [...document.querySelectorAll('.nav a.link, .nav-wrap a.link, nav a.link')];
@@ -42,7 +42,7 @@
     return overview.parentElement;
   };
 
-  const findMediaRoot = () => findTabs()?.closest('.media') || document.querySelector('.media');
+  const findMediaRoot = () => findTabs()?.closest('.media-page-unscoped, .media') || document.querySelector('.media-page-unscoped, .media');
 
   const findTabBranch = (tabs, root) => {
     let branch = tabs;
