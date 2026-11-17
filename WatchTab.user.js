@@ -22,7 +22,7 @@
   };
 
   const findTabs = () => {
-    const candidates = [...document.querySelectorAll('.nav, .nav-wrap, nav')];
+    const candidates = [...document.querySelectorAll('.nav, .nav-wrap, nav')].sort((a, b) => a.querySelectorAll('.link').length - b.querySelectorAll('.link').length);
     return candidates.find(node => {
       const text = (node.innerText || '').toLowerCase();
       return text.includes('overview') && (text.includes('character') || text.includes('staff') || text.includes('stats'));
